@@ -38,48 +38,40 @@ def home():
 # ------------------------
 @app.route("/tv", methods=["POST"])
 def tv():
-
-    raw_body = request.data.decode("utf-8")
+    raw_body = request.data.decode("utf-8", errors="replace")
     print("RAW BODY:", raw_body)
 
+    data = {}
     try:
         data = json.loads(raw_body)
+        print("PARSED JSON:", data)
     except Exception as e:
-        print("JSON parse error:", e)
-        return jsonify({"error": "Invalid JSON"}), 400
+        print("JSON parse failed:", e)
 
-    print("PARSED JSON:", data)
+    # If JSON parsed, enforce secret
+    env_secret = (TV_SECRET or "").strip()
+    incoming_secret = (str(data.get("secret", "")) if data else "").strip()
 
-    incoming_secret = str(data.get("secret", "")).strip()
-    env_secret = str(TV_SECRET).strip()
+    if env_secret:
+        # If we couldn't parse JSON, we can't verify secret -> reject
+        if not data or incoming_secret != env_secret:
+            print("❌ SECRET MISMATCH", {"incoming": incoming_secret, "env": env_secret})
+            return jsonify({"error": "Unauthorized"}), 401
 
-    print("Incoming secret:", incoming_secret)
-    print("Env secret:", env_secret)
-
-    # Secret validation
-    if env_secret and incoming_secret != env_secret:
-        print("❌ SECRET MISMATCH")
-        return jsonify({"error": "Unauthorized"}), 401
-
-    print("✅ Secret OK")
-
-    symbol = data.get("symbol", "N/A")
-    tf = data.get("tf", "N/A")
-    price = data.get("price", "N/A")
-    time = data.get("time", "N/A")
-
-    # Build simple Telegram message
-    msg = (
-        "🟢 TradingView Alert\n\n"
-        f"Symbol: {symbol}\n"
-        f"TF: {tf}\n"
-        f"Price: {price}\n"
-        f"Time: {time}"
-    )
+    # Build message
+    if data:
+        symbol = data.get("symbol", "N/A")
+        tf = data.get("tf", "N/A")
+        price = data.get("price", "N/A")
+        t = data.get("time", "N/A")
+        msg = f"🟢 TradingView Alert\n\nSymbol: {symbol}\nTF: {tf}\nPrice: {price}\nTime: {t}"
+    else:
+        # Fallback: forward raw body
+        msg = f"🟠 TradingView Raw Alert:\n{raw_body}"
 
     ok = send_telegram(msg)
-
     return jsonify({"ok": ok}), (200 if ok else 500)
+
 
 
 # ------------------------
