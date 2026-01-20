@@ -16,18 +16,37 @@ def send_telegram(text):
 @app.route("/", methods=["GET"])
 def home():
     return "OK"
-
 @app.route("/tv", methods=["POST"])
 def tv():
-    data = request.json
+    data = request.get_json()
+
+    if not data:
+        send_telegram("❌ Empty TradingView payload")
+        return jsonify({"error": "no data"}), 400
 
     if data.get("secret") != TV_SECRET:
+        send_telegram("❌ Wrong TradingView secret")
         return jsonify({"error": "Unauthorized"}), 401
 
-    message = data.get("message", "TradingView Alert")
-    send_telegram(message)
+    symbol = data.get("symbol", "N/A")
+    tf     = data.get("tf", "N/A")
+    price  = data.get("price", "N/A")
+    t      = data.get("time", "N/A")
+    typ    = data.get("type", "SIGNAL")
 
-    return jsonify({"status": "sent"})
+    msg = (
+        f"🚨 TradingView Signal\n\n"
+        f"Type: {typ}\n"
+        f"Symbol: {symbol}\n"
+        f"TF: {tf}\n"
+        f"Price: {price}\n"
+        f"Time: {t}"
+    )
+
+    send_telegram(msg)
+    return jsonify({"ok": True}), 200
+
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
