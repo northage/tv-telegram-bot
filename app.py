@@ -1,51 +1,91 @@
 import os
-from flask import Flask, request, jsonify
+import json
 import requests
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-TV_SECRET = os.getenv("TRADINGVIEW_SECRET", "")
+TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TV_SECRET  = os.getenv("TRADINGVIEW_SECRET", "").strip()
 
 
-def send_telegram(text):
+def tg_send(text: str) -> tuple[bool, str]:
+    if not TG_TOKEN or not TG_CHAT_ID:
+        return False, "Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
+
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     r = requests.post(
         url,
-        json={
-            "chat_id": TG_CHAT_ID,
-            "text": text
-        },
-        timeout=15
+        json={"chat_id": TG_CHAT_ID, "text": text},
+        timeout=20
     )
-    print("Telegram status:", r.status_code)
-    print("Telegram response:", r.text)
-    return r.status_code == 200
+    return (r.status_code == 200), f"{r.status_code} {r.text}"
 
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
     return "OK"
 
 
+# Quick Render -> Telegram check
+@app.route("/tg_test", methods=["GET"])
+def tg_test():
+    ok, info = tg_send("✅ Render → Telegram connection OK")
+    return jsonify({"ok": ok, "info": info}), (200 if ok else 500)
+
+
 @app.route("/tv", methods=["POST"])
 def tv():
+    raw = request.get_data(as_text=True) or ""
+    print("=== WEBHOOK RECEIVED ===")
+    print("Content-Type:", request.headers.get("Content-Type"))
+    print("Raw body:", raw[:2000])
 
-    raw_body = request.data.decode("utf-8", errors="ignore")
+    # 1) Parse JSON safely (TradingView sometimes sends text/plain)
+    data = {}
+    try:
+        data = request.get_json(silent=True) or {}
+        if not data and raw.strip().startswith("{"):
+            data = json.loads(raw)
+    except Exception as e:
+        print("JSON parse failed:", str(e))
+        tg_send("❌ Webhook received but JSON parse failed.\n\n" + raw[:1500])
+        return jsonify({"error": "bad json"}), 400
 
-    print("========== WEBHOOK RECEIVED ==========")
-    print(raw_body)
-    print("======================================")
+    print("Parsed keys:", list(data.keys()))
 
-    # Simple secret check (string match, not JSON)
-    if TV_SECRET and TV_SECRET not in raw_body:
-        print("❌ Secret NOT found in payload")
-        return jsonify({"error": "Unauthorized"}), 401
+    # 2) Secret check (only if env secret set)
+    incoming_secret = (data.get("secret") or "").strip()
+    if TV_SECRET and incoming_secret != TV_SECRET:
+        print("❌ SECRET MISMATCH", {"incoming": incoming_secret, "env": TV_SECRET})
+        tg_send("❌ Secret mismatch — webhook blocked.")
+        return jsonify({"error": "unauthorized"}), 401
 
-    # Send RAW message straight to Telegram
-    msg = "📡 TradingView Alert\n\n" + raw_body
+    # 3) Build final Telegram message (ONLY the message/text field)
+    typ = data.get("type", "UNKNOWN")
+    symbol = data.get("symbol", "N/A")
+    tf = data.get("tf", "N/A")
+    price = data.get("price", "N/A")
+    t = data.get("time", "N/A")
 
-    ok = send_telegram(msg)
+    msg = (data.get("message") or "").strip()
+    if not msg:
+        msg = (data.get("text") or "").strip()
 
-    return jsonify({"ok": ok}), 200
+    # If Pine didn’t include a message, create one:
+    if not msg:
+        msg = (
+            f"📣 TradingView Alert\n"
+            f"Type: {typ}\n"
+            f"Symbol: {symbol}\n"
+            f"TF: {tf}\n"
+            f"Price: {price}\n"
+            f"Time: {t}"
+        )
+
+    # 4) Send to Telegram
+    ok, info = tg_send(msg)
+    print("Telegram send:", ok, info)
+
+    return jsonify({"ok": ok, "info": info}), (200 if ok else 500)
