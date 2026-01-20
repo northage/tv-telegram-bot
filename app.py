@@ -16,23 +16,30 @@ def send_telegram(text):
 @app.route("/", methods=["GET"])
 def home():
     return "OK"
+from datetime import datetime, timezone
+
 @app.route("/tv", methods=["POST"])
 def tv():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
 
-    if not data:
-        send_telegram("❌ Empty TradingView payload")
-        return jsonify({"error": "no data"}), 400
-
+    # Secret check
     if data.get("secret") != TV_SECRET:
-        send_telegram("❌ Wrong TradingView secret")
         return jsonify({"error": "Unauthorized"}), 401
 
+    typ    = data.get("type", "SIGNAL")
     symbol = data.get("symbol", "N/A")
     tf     = data.get("tf", "N/A")
     price  = data.get("price", "N/A")
-    t      = data.get("time", "N/A")
-    typ    = data.get("type", "SIGNAL")
+    t_raw  = data.get("time", "")
+
+    # Convert time if it's unix ms
+    t_pretty = str(t_raw)
+    try:
+        ms = int(float(t_raw))
+        dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+        t_pretty = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    except:
+        pass
 
     msg = (
         f"🚨 TradingView Signal\n\n"
@@ -40,11 +47,12 @@ def tv():
         f"Symbol: {symbol}\n"
         f"TF: {tf}\n"
         f"Price: {price}\n"
-        f"Time: {t}"
+        f"Time: {t_pretty}"
     )
 
     send_telegram(msg)
     return jsonify({"ok": True}), 200
+
 
 
 
